@@ -8,22 +8,41 @@ import jwt
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any
+from jwt import PyJWKSClient
+from jwt.exceptions import InvalidTokenError
 
 app = FastAPI()
 
+# UPDATED CORS Configuration - Replace your existing CORS middleware with this:
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://askbabushka.ai",           # Your production domain
+        "https://*.vercel.app",             # Vercel preview deployments
+        "https://askbabushka.vercel.app",   # Your Vercel domain (if different)
+        "http://localhost:3000",            # Local development
+        "http://localhost:8000",            # Local API testing
+        "http://127.0.0.1:3000",           # Alternative localhost
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization", 
+        "Content-Type", 
+        "Accept",
+        "Origin",
+        "X-Requested-With"
+    ],
 )
 
-# Initialize Anthropic client - keeping your working version
+# Initialize Anthropic client
 api_key = os.getenv("ANTHROPIC_API_KEY")
 clerk_secret = os.getenv("CLERK_SECRET_KEY")
+clerk_instance_url = os.getenv("CLERK_INSTANCE_URL")  # Add this
+
 print(f"DEBUG: API key from environment: {'Found' if api_key else 'Not found'}")
 print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
+print(f"DEBUG: Clerk instance URL: {clerk_instance_url}")
 
 if not api_key:
     print("ERROR: ANTHROPIC_API_KEY not found in environment!")
@@ -32,27 +51,48 @@ if not api_key:
 print(f"DEBUG: API key loaded successfully")
 client = anthropic.Anthropic(api_key=api_key)
 
-# In-memory storage for user conversations (in production, use a real database)
+# In-memory storage for user conversations
 user_conversations: Dict[str, list] = {}
 
-# Clerk JWT verification function
+# UPDATED Clerk JWT verification function with proper security:
 async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
     """Verify Clerk JWT token and return user info"""
-    if not authorization or not clerk_secret:
+    if not authorization or not clerk_instance_url:
         return None
     
     try:
         # Extract token from "Bearer <token>"
         token = authorization.replace("Bearer ", "")
         
-        # Simple verification for demo (in production, use proper JWT verification)
+        # Construct JWKS URL using your Clerk instance
+        jwks_url = f"https://{clerk_instance_url}/.well-known/jwks.json"
+        print(f"DEBUG: Using JWKS URL: {jwks_url}")
+        
+        # Create JWKS client to get public keys
+        jwks_client = PyJWKSClient(jwks_url)
+        
+        # Get the signing key
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        
+        # Verify token without audience (since Blank template doesn't set one)
         decoded = jwt.decode(
             token,
-            options={"verify_signature": False},  # Simplified for demo
-            algorithms=["RS256"]
+            signing_key.key,
+            algorithms=["RS256"],
+            options={
+                "verify_signature": True,
+                "verify_aud": False,  # No audience to verify with Blank template
+                "verify_exp": True,
+                "verify_iat": True,
+            }
         )
         
+        print(f"DEBUG: Token verified successfully for user: {decoded.get('sub')}")
         return decoded
+        
+    except InvalidTokenError as e:
+        print(f"DEBUG: Invalid token: {e}")
+        return None
     except Exception as e:
         print(f"DEBUG: Token verification error: {e}")
         return None
