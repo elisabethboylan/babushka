@@ -8,7 +8,7 @@ import jwt
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any
-from jwt import PyJWKSClient
+from jwt import PyJWKClient
 from jwt.exceptions import InvalidTokenError
 
 app = FastAPI()
@@ -69,7 +69,7 @@ async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Opt
         print(f"DEBUG: Using JWKS URL: {jwks_url}")
         
         # Create JWKS client to get public keys
-        jwks_client = PyJWKSClient(jwks_url)
+        jwks_client = PyJWKClient(jwks_url)
         
         # Get the signing key
         signing_key = jwks_client.get_signing_key_from_jwt(token)
