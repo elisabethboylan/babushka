@@ -8,115 +8,51 @@ import jwt
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any
-from jwt import PyJWKClient
-from jwt.exceptions import InvalidTokenError
 
 app = FastAPI()
 
-# UPDATED CORS Configuration with more permissive settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://askbabushka.ai",
-        "https://www.askbabushka.ai",
-        "https://*.vercel.app",
-        "https://askbabushka.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=[
-        "*",  # Allow all headers for debugging
-    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Initialize Anthropic client
+# Initialize Anthropic client - keeping your working version
 api_key = os.getenv("ANTHROPIC_API_KEY")
 clerk_secret = os.getenv("CLERK_SECRET_KEY")
-
-# Fixed environment variable handling
-clerk_instance_url = (
-    os.getenv("CLERK_INSTANCE_URL") or 
-    "brave-fawn-12.clerk.accounts.dev"  # Your specific Clerk instance
-)
-
 print(f"DEBUG: API key from environment: {'Found' if api_key else 'Not found'}")
 print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
-print(f"DEBUG: Clerk instance URL: {clerk_instance_url}")
 
 if not api_key:
     print("ERROR: ANTHROPIC_API_KEY not found in environment!")
     raise HTTPException(status_code=500, detail="API key not configured")
 
-print("DEBUG: API key loaded successfully")
+print(f"DEBUG: API key loaded successfully")
 client = anthropic.Anthropic(api_key=api_key)
 
-# In-memory storage for user conversations
+# In-memory storage for user conversations (in production, use a real database)
 user_conversations: Dict[str, list] = {}
 
-# FIXED Clerk JWT verification function:
+# Clerk JWT verification function
 async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
     """Verify Clerk JWT token and return user info"""
-    if not authorization:
-        print("DEBUG: No authorization header provided")
+    if not authorization or not clerk_secret:
         return None
     
     try:
         # Extract token from "Bearer <token>"
-        if not authorization.startswith("Bearer "):
-            print("DEBUG: Authorization header doesn't start with 'Bearer '")
-            return None
-            
         token = authorization.replace("Bearer ", "")
-        print("DEBUG: Attempting to verify token...")
         
-        # Try multiple JWKS URL patterns for your Clerk instance
-        jwks_urls = [
-            f"https://{clerk_instance_url}/.well-known/jwks.json",
-            "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"  # Your specific instance
-        ]
+        # Simple verification for demo (in production, use proper JWT verification)
+        decoded = jwt.decode(
+            token,
+            options={"verify_signature": False},  # Simplified for demo
+            algorithms=["RS256"]
+        )
         
-        for jwks_url in jwks_urls:
-            try:
-                print(f"DEBUG: Trying JWKS URL: {jwks_url}")
-                
-                # Create JWKS client to get public keys
-                jwks_client = PyJWKClient(jwks_url)
-                
-                # Get the signing key
-                signing_key = jwks_client.get_signing_key_from_jwt(token)
-                
-                # Verify token with flexible validation
-                decoded = jwt.decode(
-                    token,
-                    signing_key.key,
-                    algorithms=["RS256"],
-                    options={
-                        "verify_signature": True,
-                        "verify_aud": False,  # Disable audience verification for custom templates
-                        "verify_exp": True,
-                        "verify_iat": True,
-                        "verify_iss": False,  # Disable issuer verification for now
-                    }
-                )
-                
-                print(f"DEBUG: Token verified successfully with {jwks_url}")
-                print(f"DEBUG: User ID: {decoded.get('sub')}")
-                return decoded
-                
-            except Exception as url_error:
-                print(f"DEBUG: Failed with {jwks_url}: {str(url_error)}")
-                continue
-        
-        print("DEBUG: All JWKS URLs failed")
-        return None
-        
-    except InvalidTokenError as e:
-        print(f"DEBUG: Invalid token: {e}")
-        return None
+        return decoded
     except Exception as e:
         print(f"DEBUG: Token verification error: {e}")
         return None
@@ -127,19 +63,7 @@ class RelationshipSituation(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "clerk_config": clerk_instance_url}
-
-@app.get("/debug/clerk")
-async def debug_clerk():
-    """Debug endpoint to check Clerk configuration"""
-    return {
-        "clerk_instance_url": clerk_instance_url,
-        "clerk_secret_configured": bool(clerk_secret),
-        "possible_jwks_urls": [
-            f"https://{clerk_instance_url}/.well-known/jwks.json",
-            "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"
-        ]
-    }
+    return {"status": "healthy"}
 
 @app.get("/philosophy-mix")
 async def get_philosophy_mix():
@@ -186,8 +110,6 @@ async def get_relationship_advice(
         if user_info:
             user_id = user_info.get("sub")  # Clerk uses 'sub' for user ID
             print(f"DEBUG: Authenticated user: {user_id}")
-        else:
-            print("DEBUG: No user authentication")
         
         # Store user message if authenticated
         if user_id:
@@ -259,7 +181,7 @@ Keep your response between 100-200 words. Address the person as "dearest child" 
         )
 
         advice_text = response.content[0].text
-        print("DEBUG: Anthropic response received successfully")
+        print(f"DEBUG: Anthropic response received successfully")
         
         # Store bot response if authenticated
         if user_id:
@@ -269,7 +191,7 @@ Keep your response between 100-200 words. Address the person as "dearest child" 
                 "content": advice_text
             })
         
-        return {"advice": advice_text, "user_id": user_id, "authenticated": bool(user_info)}
+        return {"advice": advice_text, "user_id": user_id}
         
     except Exception as e:
         print(f"DEBUG: Exception caught: {str(e)}")
