@@ -13,7 +13,7 @@ from jwt.exceptions import InvalidTokenError
 
 app = FastAPI()
 
-# UPDATED CORS Configuration with more permissive settings for debugging
+# UPDATED CORS Configuration with more permissive settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -37,20 +37,21 @@ app.add_middleware(
 api_key = os.getenv("ANTHROPIC_API_KEY")
 clerk_secret = os.getenv("CLERK_SECRET_KEY")
 
-# Updated environment variable names (common Clerk patterns)
+# Fixed environment variable handling
 clerk_instance_url = (
     os.getenv("CLERK_INSTANCE_URL") or 
-    os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").replace("pk_live_", "").replace("pk_test_", "") or
-    "clerk.askbabushka.ai"  # Default based on your domain
+    "brave-fawn-12.clerk.accounts.dev"  # Your specific Clerk instance
 )
 
+print(f"DEBUG: API key from environment: {'Found' if api_key else 'Not found'}")
+print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
 print(f"DEBUG: Clerk instance URL: {clerk_instance_url}")
 
 if not api_key:
     print("ERROR: ANTHROPIC_API_KEY not found in environment!")
     raise HTTPException(status_code=500, detail="API key not configured")
 
-print(f"DEBUG: API key loaded successfully")
+print("DEBUG: API key loaded successfully")
 client = anthropic.Anthropic(api_key=api_key)
 
 # In-memory storage for user conversations
@@ -70,12 +71,11 @@ async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Opt
             return None
             
         token = authorization.replace("Bearer ", "")
-        print(f"DEBUG: Attempting to verify token...")
+        print("DEBUG: Attempting to verify token...")
         
-        # Try multiple JWKS URL patterns
+        # Try multiple JWKS URL patterns for your Clerk instance
         jwks_urls = [
             f"https://{clerk_instance_url}/.well-known/jwks.json",
-            f"https://clerk.{clerk_instance_url}/.well-known/jwks.json",
             "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"  # Your specific instance
         ]
         
@@ -89,14 +89,14 @@ async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Opt
                 # Get the signing key
                 signing_key = jwks_client.get_signing_key_from_jwt(token)
                 
-                # Verify token with minimal validation for debugging
+                # Verify token with flexible validation
                 decoded = jwt.decode(
                     token,
                     signing_key.key,
                     algorithms=["RS256"],
                     options={
                         "verify_signature": True,
-                        "verify_aud": False,  # Disable audience verification
+                        "verify_aud": False,  # Disable audience verification for custom templates
                         "verify_exp": True,
                         "verify_iat": True,
                         "verify_iss": False,  # Disable issuer verification for now
@@ -137,7 +137,6 @@ async def debug_clerk():
         "clerk_secret_configured": bool(clerk_secret),
         "possible_jwks_urls": [
             f"https://{clerk_instance_url}/.well-known/jwks.json",
-            f"https://clerk.{clerk_instance_url}/.well-known/jwks.json",
             "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"
         ]
     }
@@ -260,7 +259,7 @@ Keep your response between 100-200 words. Address the person as "dearest child" 
         )
 
         advice_text = response.content[0].text
-        print(f"DEBUG: Anthropic response received successfully")
+        print("DEBUG: Anthropic response received successfully")
         
         # Store bot response if authenticated
         if user_id:
@@ -317,6 +316,4 @@ async def get_stats(user_info: Optional[Dict[str, Any]] = Depends(verify_clerk_t
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) API key from environment: {'Found' if api_key else 'Not found'}")
-print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
-print(f"DEBUG:
+    uvicorn.run(app, host="0.0.0.0", port=8000)
