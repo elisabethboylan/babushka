@@ -13,35 +13,37 @@ from jwt.exceptions import InvalidTokenError
 
 app = FastAPI()
 
-# UPDATED CORS Configuration - Replace your existing CORS middleware with this:
+# UPDATED CORS Configuration with more permissive settings for debugging
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://askbabushka.ai",           # Your production domain
-        "https://*.vercel.app",             # Vercel preview deployments
-        "https://askbabushka.vercel.app",   # Your Vercel domain (if different)
-        "http://localhost:3000",            # Local development
-        "http://localhost:8000",            # Local API testing
-        "http://127.0.0.1:3000",           # Alternative localhost
+        "https://askbabushka.ai",
+        "https://www.askbabushka.ai",
+        "https://*.vercel.app",
+        "https://askbabushka.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=[
-        "Authorization", 
-        "Content-Type", 
-        "Accept",
-        "Origin",
-        "X-Requested-With"
+        "*",  # Allow all headers for debugging
     ],
 )
 
 # Initialize Anthropic client
 api_key = os.getenv("ANTHROPIC_API_KEY")
 clerk_secret = os.getenv("CLERK_SECRET_KEY")
-clerk_instance_url = os.getenv("CLERK_INSTANCE_URL")  # Add this
 
-print(f"DEBUG: API key from environment: {'Found' if api_key else 'Not found'}")
-print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
+# Updated environment variable names (common Clerk patterns)
+clerk_instance_url = (
+    os.getenv("CLERK_INSTANCE_URL") or 
+    os.getenv("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "").replace("pk_live_", "").replace("pk_test_", "") or
+    "clerk.askbabushka.ai"  # Default based on your domain
+)
+
 print(f"DEBUG: Clerk instance URL: {clerk_instance_url}")
 
 if not api_key:
@@ -54,41 +56,63 @@ client = anthropic.Anthropic(api_key=api_key)
 # In-memory storage for user conversations
 user_conversations: Dict[str, list] = {}
 
-# UPDATED Clerk JWT verification function with proper security:
+# FIXED Clerk JWT verification function:
 async def verify_clerk_token(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
     """Verify Clerk JWT token and return user info"""
-    if not authorization or not clerk_instance_url:
+    if not authorization:
+        print("DEBUG: No authorization header provided")
         return None
     
     try:
         # Extract token from "Bearer <token>"
+        if not authorization.startswith("Bearer "):
+            print("DEBUG: Authorization header doesn't start with 'Bearer '")
+            return None
+            
         token = authorization.replace("Bearer ", "")
+        print(f"DEBUG: Attempting to verify token...")
         
-        # Construct JWKS URL using your Clerk instance
-        jwks_url = f"https://{clerk_instance_url}/.well-known/jwks.json"
-        print(f"DEBUG: Using JWKS URL: {jwks_url}")
+        # Try multiple JWKS URL patterns
+        jwks_urls = [
+            f"https://{clerk_instance_url}/.well-known/jwks.json",
+            f"https://clerk.{clerk_instance_url}/.well-known/jwks.json",
+            "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"  # Your specific instance
+        ]
         
-        # Create JWKS client to get public keys
-        jwks_client = PyJWKClient(jwks_url)
+        for jwks_url in jwks_urls:
+            try:
+                print(f"DEBUG: Trying JWKS URL: {jwks_url}")
+                
+                # Create JWKS client to get public keys
+                jwks_client = PyJWKClient(jwks_url)
+                
+                # Get the signing key
+                signing_key = jwks_client.get_signing_key_from_jwt(token)
+                
+                # Verify token with minimal validation for debugging
+                decoded = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=["RS256"],
+                    options={
+                        "verify_signature": True,
+                        "verify_aud": False,  # Disable audience verification
+                        "verify_exp": True,
+                        "verify_iat": True,
+                        "verify_iss": False,  # Disable issuer verification for now
+                    }
+                )
+                
+                print(f"DEBUG: Token verified successfully with {jwks_url}")
+                print(f"DEBUG: User ID: {decoded.get('sub')}")
+                return decoded
+                
+            except Exception as url_error:
+                print(f"DEBUG: Failed with {jwks_url}: {str(url_error)}")
+                continue
         
-        # Get the signing key
-        signing_key = jwks_client.get_signing_key_from_jwt(token)
-        
-        # Verify token without audience (since Blank template doesn't set one)
-        decoded = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            options={
-                "verify_signature": True,
-                "verify_aud": False,  # No audience to verify with Blank template
-                "verify_exp": True,
-                "verify_iat": True,
-            }
-        )
-        
-        print(f"DEBUG: Token verified successfully for user: {decoded.get('sub')}")
-        return decoded
+        print("DEBUG: All JWKS URLs failed")
+        return None
         
     except InvalidTokenError as e:
         print(f"DEBUG: Invalid token: {e}")
@@ -103,7 +127,20 @@ class RelationshipSituation(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "clerk_config": clerk_instance_url}
+
+@app.get("/debug/clerk")
+async def debug_clerk():
+    """Debug endpoint to check Clerk configuration"""
+    return {
+        "clerk_instance_url": clerk_instance_url,
+        "clerk_secret_configured": bool(clerk_secret),
+        "possible_jwks_urls": [
+            f"https://{clerk_instance_url}/.well-known/jwks.json",
+            f"https://clerk.{clerk_instance_url}/.well-known/jwks.json",
+            "https://brave-fawn-12.clerk.accounts.dev/.well-known/jwks.json"
+        ]
+    }
 
 @app.get("/philosophy-mix")
 async def get_philosophy_mix():
@@ -150,6 +187,8 @@ async def get_relationship_advice(
         if user_info:
             user_id = user_info.get("sub")  # Clerk uses 'sub' for user ID
             print(f"DEBUG: Authenticated user: {user_id}")
+        else:
+            print("DEBUG: No user authentication")
         
         # Store user message if authenticated
         if user_id:
@@ -231,7 +270,7 @@ Keep your response between 100-200 words. Address the person as "dearest child" 
                 "content": advice_text
             })
         
-        return {"advice": advice_text, "user_id": user_id}
+        return {"advice": advice_text, "user_id": user_id, "authenticated": bool(user_info)}
         
     except Exception as e:
         print(f"DEBUG: Exception caught: {str(e)}")
@@ -278,4 +317,6 @@ async def get_stats(user_info: Optional[Dict[str, Any]] = Depends(verify_clerk_t
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000) API key from environment: {'Found' if api_key else 'Not found'}")
+print(f"DEBUG: Clerk secret from environment: {'Found' if clerk_secret else 'Not found'}")
+print(f"DEBUG:
